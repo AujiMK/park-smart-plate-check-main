@@ -116,7 +116,7 @@ export const InterfaceSelector = ({ onSelectInterface }: InterfaceSelectorProps)
           <div className="text-center mt-12">
             <div className="bg-muted/50 rounded-lg p-6">
               <h3 className="font-semibold mb-2">Parking Rates</h3>
-              <p className="text-2xl font-bold text-primary">$0.50 per 30 minutes</p>
+              <p className="text-2xl font-bold text-primary">BND$0.50 per 30 minutes</p>
               <p className="text-sm text-muted-foreground mt-1">Minimum charge: 30 minutes</p>
             </div>
           </div>

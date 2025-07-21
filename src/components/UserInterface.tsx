@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Search, Car, Clock, DollarSign, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Receipt } from "./Receipt";
+import { parkingService, ParkingEntry as SupabaseParkingEntry } from "@/lib/supabase";
 
 interface ParkingEntry {
   id: number;
@@ -23,85 +24,143 @@ export const UserInterface = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [showReceipt, setShowReceipt] = useState(false);
   const [receiptData, setReceiptData] = useState<any>(null);
+  const [currentFee, setCurrentFee] = useState<number>(0);
+  const [feeBreakdown, setFeeBreakdown] = useState<any>(null);
+  const [hasOutstandingOvernight, setHasOutstandingOvernight] = useState<boolean>(false);
+  const [isLoadingFee, setIsLoadingFee] = useState<boolean>(false);
   const { toast } = useToast();
 
-  const ratePerHalfHour = 0.50;
+  const ratePerHalfHour = 0.50; // BND$0.50 per 30 minutes
   const BUSINESS_END_HOUR = 17;
   const BUSINESS_END_MINUTE = 30;
 
+  // Calculate fee based on duration in minutes
+  const calculateFeeFromDuration = (minutes: number) => {
+    const halfHourBlocks = Math.ceil(minutes / 30);
+    return Math.max(halfHourBlocks * ratePerHalfHour, ratePerHalfHour);
+  };
+
+  // Transform Supabase entry to local interface
+  const transformSupabaseEntry = (entry: SupabaseParkingEntry): ParkingEntry => ({
+    id: entry.id,
+    plateNumber: entry.plate_number,
+    entryTime: entry.entry_time,
+    exitTime: entry.exit_time,
+    payment: entry.payment,
+    isOvernight: entry.is_overnight
+  });
+
+  // Load fee data when search result changes
+  const loadFeeData = async (entry: ParkingEntry) => {
+    setIsLoadingFee(true);
+    try {
+      const [fee, breakdown, outstanding] = await Promise.all([
+        calculateCurrentFee(entry),
+        calculateFeeBreakdown(entry),
+        checkForOutstandingOvernight(entry.plateNumber, entry.id)
+      ]);
+      
+      console.log('Fee calculation results:', {
+        fee,
+        breakdown,
+        outstanding,
+        entryTime: entry.entryTime,
+        currentTime: new Date().toISOString()
+      });
+      
+      setCurrentFee(fee);
+      setFeeBreakdown(breakdown);
+      setHasOutstandingOvernight(outstanding);
+    } catch (error) {
+      console.error('Error loading fee data:', error);
+    } finally {
+      setIsLoadingFee(false);
+    }
+  };
+
   // Check if vehicle has outstanding overnight parking from previous entries
-  const checkForOutstandingOvernight = (plateNumber: string, currentEntryId: number) => {
-    const entries = JSON.parse(localStorage.getItem("parkingEntries") || "[]");
-    const vehicleEntries = entries.filter(
-      (entry: ParkingEntry) => entry.plateNumber.toLowerCase() === plateNumber.toLowerCase() && entry.id !== currentEntryId
-    );
-    
-    if (vehicleEntries.length === 0) return false;
-    
-    // Check if there's a previous entry that's still parked and is overnight
-    const previousOvernightEntry = vehicleEntries.find(entry => {
-      if (entry.exitTime) return false; // Already exited
+  const checkForOutstandingOvernight = async (plateNumber: string, currentEntryId: number) => {
+    try {
+      const entries = await parkingService.getAllEntries();
+      const vehicleEntries = entries.filter(
+        (entry: SupabaseParkingEntry) => entry.plate_number.toLowerCase() === plateNumber.toLowerCase() && entry.id !== currentEntryId
+      );
       
-      const entryDate = new Date(entry.entryTime);
-      const now = new Date();
+      if (vehicleEntries.length === 0) return false;
       
-      // Check if it's from previous day
-      const entryDateOnly = new Date(entryDate.getFullYear(), entryDate.getMonth(), entryDate.getDate());
-      const currentDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const isPreviousDay = entryDateOnly < currentDateOnly;
+      // Check if there's a previous entry that's still parked and is overnight
+      const previousOvernightEntry = vehicleEntries.find(entry => {
+        if (entry.exit_time) return false; // Already exited
+        
+        const entryDate = new Date(entry.entry_time);
+        const now = new Date();
+        
+        // Check if it's from previous day
+        const entryDateOnly = new Date(entryDate.getFullYear(), entryDate.getMonth(), entryDate.getDate());
+        const currentDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const isPreviousDay = entryDateOnly < currentDateOnly;
+        
+        // Check if vehicle entered before 5:30 PM on same day
+        const entryHour = entryDate.getHours();
+        const entryMinute = entryDate.getMinutes();
+        const entryTimeMinutes = entryHour * 60 + entryMinute;
+        const endTime = BUSINESS_END_HOUR * 60 + BUSINESS_END_MINUTE; // 5:30 PM
+        const enteredBeforeBusinessEnd = entryTimeMinutes < endTime;
+        
+        return (isPreviousDay && enteredBeforeBusinessEnd) || (enteredBeforeBusinessEnd && now.getHours() >= BUSINESS_END_HOUR && now.getMinutes() >= BUSINESS_END_MINUTE);
+      });
       
-      // Check if vehicle entered before 5:30 PM on same day
-      const entryHour = entryDate.getHours();
-      const entryMinute = entryDate.getMinutes();
-      const entryTimeMinutes = entryHour * 60 + entryMinute;
-      const endTime = BUSINESS_END_HOUR * 60 + BUSINESS_END_MINUTE; // 5:30 PM
-      const enteredBeforeBusinessEnd = entryTimeMinutes < endTime;
-      
-      return (isPreviousDay && enteredBeforeBusinessEnd) || (enteredBeforeBusinessEnd && now.getHours() >= BUSINESS_END_HOUR && now.getMinutes() >= BUSINESS_END_MINUTE);
-    });
-    
-    return !!previousOvernightEntry;
+      return !!previousOvernightEntry;
+    } catch (error) {
+      console.error('Error checking outstanding overnight:', error);
+      return false;
+    }
   };
 
   // Calculate outstanding overnight fee for a specific vehicle
-  const calculateOutstandingOvernightFee = (plateNumber: string, currentEntryId: number) => {
-    const entries = JSON.parse(localStorage.getItem("parkingEntries") || "[]");
-    const vehicleEntries = entries.filter(
-      (entry: ParkingEntry) => entry.plateNumber.toLowerCase() === plateNumber.toLowerCase() && entry.id !== currentEntryId
-    );
-    
-    if (vehicleEntries.length === 0) return 0;
-    
-    // Find the previous overnight entry
-    const previousOvernightEntry = vehicleEntries.find(entry => {
-      if (entry.exitTime) return false;
+  const calculateOutstandingOvernightFee = async (plateNumber: string, currentEntryId: number) => {
+    try {
+      const entries = await parkingService.getAllEntries();
+      const vehicleEntries = entries.filter(
+        (entry: SupabaseParkingEntry) => entry.plate_number.toLowerCase() === plateNumber.toLowerCase() && entry.id !== currentEntryId
+      );
       
-      const entryDate = new Date(entry.entryTime);
-      const now = new Date();
+      if (vehicleEntries.length === 0) return 0;
       
-      const entryDateOnly = new Date(entryDate.getFullYear(), entryDate.getMonth(), entryDate.getDate());
-      const currentDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const isPreviousDay = entryDateOnly < currentDateOnly;
+      // Find the previous overnight entry
+      const previousOvernightEntry = vehicleEntries.find(entry => {
+        if (entry.exit_time) return false;
+        
+        const entryDate = new Date(entry.entry_time);
+        const now = new Date();
+        
+        const entryDateOnly = new Date(entryDate.getFullYear(), entryDate.getMonth(), entryDate.getDate());
+        const currentDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const isPreviousDay = entryDateOnly < currentDateOnly;
+        
+        const entryHour = entryDate.getHours();
+        const entryMinute = entryDate.getMinutes();
+        const entryTimeMinutes = entryHour * 60 + entryMinute;
+        const endTime = BUSINESS_END_HOUR * 60 + BUSINESS_END_MINUTE;
+        const enteredBeforeBusinessEnd = entryTimeMinutes < endTime;
+        
+        return (isPreviousDay && enteredBeforeBusinessEnd) || (enteredBeforeBusinessEnd && now.getHours() >= BUSINESS_END_HOUR && now.getMinutes() >= BUSINESS_END_MINUTE);
+      });
       
-      const entryHour = entryDate.getHours();
-      const entryMinute = entryDate.getMinutes();
-      const entryTimeMinutes = entryHour * 60 + entryMinute;
-      const endTime = BUSINESS_END_HOUR * 60 + BUSINESS_END_MINUTE;
-      const enteredBeforeBusinessEnd = entryTimeMinutes < endTime;
+      if (!previousOvernightEntry) return 0;
       
-      return (isPreviousDay && enteredBeforeBusinessEnd) || (enteredBeforeBusinessEnd && now.getHours() >= BUSINESS_END_HOUR && now.getMinutes() >= BUSINESS_END_MINUTE);
-    });
-    
-    if (!previousOvernightEntry) return 0;
-    
-    // Calculate fee from entry time to 5:30 PM of entry day
-    const entryDate = new Date(previousOvernightEntry.entryTime);
-    const endOfDay = new Date(entryDate);
-    endOfDay.setHours(BUSINESS_END_HOUR, BUSINESS_END_MINUTE, 0, 0);
-    
-    const minutes = Math.ceil((endOfDay.getTime() - entryDate.getTime()) / (1000 * 60));
-    const halfHourBlocks = Math.ceil(minutes / 30);
-    return Math.max(halfHourBlocks * ratePerHalfHour, ratePerHalfHour);
+      // Calculate fee from entry time to 5:30 PM of entry day
+      const entryDate = new Date(previousOvernightEntry.entry_time);
+      const endOfDay = new Date(entryDate);
+      endOfDay.setHours(BUSINESS_END_HOUR, BUSINESS_END_MINUTE, 0, 0);
+      
+      const minutes = Math.ceil((endOfDay.getTime() - entryDate.getTime()) / (1000 * 60));
+      const halfHourBlocks = Math.ceil(minutes / 30);
+      return Math.max(halfHourBlocks * ratePerHalfHour, ratePerHalfHour);
+    } catch (error) {
+      console.error('Error calculating outstanding overnight fee:', error);
+      return 0;
+    }
   };
 
   // Check if vehicle has outstanding overnight parking (entered before 5:30 PM and still parked after 5:30 PM)
@@ -111,47 +170,96 @@ export const UserInterface = () => {
     const entryDate = new Date(entry.entryTime);
     const now = new Date();
     
-    // Check if it's currently after 5:30 PM
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    const currentTime = currentHour * 60 + currentMinute;
-    const endTime = BUSINESS_END_HOUR * 60 + BUSINESS_END_MINUTE; // 5:30 PM
-    
-    // Only consider overnight if it's currently after 5:30 PM
-    if (currentTime < endTime) return false;
-    
     // Check if vehicle entered before 5:30 PM
     const entryHour = entryDate.getHours();
     const entryMinute = entryDate.getMinutes();
     const entryTimeMinutes = entryHour * 60 + entryMinute;
+    const endTime = BUSINESS_END_HOUR * 60 + BUSINESS_END_MINUTE; // 5:30 PM
+    const enteredBeforeBusinessEnd = entryTimeMinutes < endTime;
     
-    return entryTimeMinutes < endTime; // Entered before 5:30 PM and currently after 5:30 PM
+    // Check if it's been more than 24 hours since entry
+    const timeDiff = now.getTime() - entryDate.getTime();
+    const hoursDiff = timeDiff / (1000 * 60 * 60);
+    const hasBeenOvernight = hoursDiff >= 24;
+    
+    // Consider overnight if:
+    // 1. Vehicle entered before 5:30 PM AND has been parked for more than 24 hours, OR
+    // 2. Vehicle entered before 5:30 PM AND it's currently after 5:30 PM
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    const currentTime = currentHour * 60 + currentMinute;
+    const isCurrentlyAfterBusinessHours = currentTime >= endTime;
+    
+    return enteredBeforeBusinessEnd && (hasBeenOvernight || isCurrentlyAfterBusinessHours);
   };
 
-  const calculatePayment = (entryTime: string, exitTime: string) => {
-    const entry = new Date(entryTime);
-    const exit = new Date(exitTime);
+  const calculatePayment = async (entryTime: string, exitTime: string, plateNumber: string) => {
+    const entryDate = new Date(entryTime);
+    const exitDate = new Date(exitTime);
     
     // Check if this is overnight parking
-    const entryHour = entry.getHours();
-    const entryMinute = entry.getMinutes();
+    const entryHour = entryDate.getHours();
+    const entryMinute = entryDate.getMinutes();
     const entryTimeMinutes = entryHour * 60 + entryMinute;
     const endTime = BUSINESS_END_HOUR * 60 + BUSINESS_END_MINUTE; // 5:30 PM
-    const isOvernight = entryTimeMinutes < endTime;
+    const enteredBeforeBusinessEnd = entryTimeMinutes < endTime;
     
-    if (isOvernight) {
+    // Check if it's been more than 24 hours since entry
+    const timeDiff = exitDate.getTime() - entryDate.getTime();
+    const hoursDiff = timeDiff / (1000 * 60 * 60);
+    const hasBeenOvernight = hoursDiff >= 24;
+    
+    if (enteredBeforeBusinessEnd && (hasBeenOvernight || exitDate.getHours() >= BUSINESS_END_HOUR)) {
       // For overnight parking, calculate from entry time to 5:30 PM
-      const endOfDay = new Date(entry);
+      const endOfDay = new Date(entryDate);
       endOfDay.setHours(BUSINESS_END_HOUR, BUSINESS_END_MINUTE, 0, 0);
       
-      const minutes = Math.ceil((endOfDay.getTime() - entry.getTime()) / (1000 * 60));
-      const halfHourBlocks = Math.ceil(minutes / 30);
-      return Math.max(halfHourBlocks * ratePerHalfHour, ratePerHalfHour);
+      const overnightMinutes = Math.ceil((endOfDay.getTime() - entryDate.getTime()) / (1000 * 60));
+      const overnightFee = calculateFeeFromDuration(overnightMinutes);
+      
+      // Check if there's a fresh entry for this vehicle on the next day
+      const entries = await parkingService.getAllEntries();
+      const nextDayEntries = entries.filter((e: SupabaseParkingEntry) => {
+        if (e.plate_number.toLowerCase() !== plateNumber.toLowerCase()) return false;
+        
+        const entryDateOnly = new Date(entryDate.getFullYear(), entryDate.getMonth(), entryDate.getDate());
+        const eDate = new Date(e.entry_time);
+        const eDateOnly = new Date(eDate.getFullYear(), eDate.getMonth(), eDate.getDate());
+        
+        // Check if this entry is on the next day
+        const nextDay = new Date(entryDateOnly);
+        nextDay.setDate(nextDay.getDate() + 1);
+        
+        return eDateOnly.getTime() === nextDay.getTime();
+      });
+      
+      // Find the earliest entry on the next day (fresh entry)
+      const freshEntry = nextDayEntries.length > 0 
+        ? nextDayEntries.reduce((earliest, current) => 
+            new Date(current.entry_time) < new Date(earliest.entry_time) ? current : earliest
+          )
+        : null;
+      
+      let currentFeeStartTime;
+      if (freshEntry) {
+        // Use the fresh entry time
+        currentFeeStartTime = new Date(freshEntry.entry_time);
+      } else {
+        // Use 8:30 AM next day as default
+        const nextDayStart = new Date(entryDate);
+        nextDayStart.setDate(nextDayStart.getDate() + 1);
+        nextDayStart.setHours(8, 30, 0, 0); // 8:30 AM next day
+        currentFeeStartTime = nextDayStart;
+      }
+      
+      const currentMinutes = Math.ceil((exitDate.getTime() - currentFeeStartTime.getTime()) / (1000 * 60));
+      const currentFee = calculateFeeFromDuration(currentMinutes);
+      
+      return overnightFee + currentFee;
     } else {
       // Regular parking calculation
-      const minutes = Math.ceil((exit.getTime() - entry.getTime()) / (1000 * 60));
-      const halfHourBlocks = Math.ceil(minutes / 30);
-      return Math.max(halfHourBlocks * ratePerHalfHour, ratePerHalfHour);
+      const totalMinutes = Math.ceil((exitDate.getTime() - entryDate.getTime()) / (1000 * 60));
+      return calculateFeeFromDuration(totalMinutes);
     }
   };
 
@@ -168,112 +276,119 @@ export const UserInterface = () => {
     return `${remainingMinutes}m`;
   };
 
-  const calculateFeeBreakdown = (entry: ParkingEntry) => {
-    const entryDate = new Date(entry.entryTime);
+  const calculateFeeBreakdown = async (entry: ParkingEntry) => {
     const now = new Date();
-    
-    // Check if this vehicle has outstanding overnight parking from previous entries
-    const hasOutstandingOvernight = checkForOutstandingOvernight(entry.plateNumber, entry.id);
-    
-    if (hasOutstandingOvernight) {
-      // Get the previous overnight entry for breakdown
-      const entries = JSON.parse(localStorage.getItem("parkingEntries") || "[]");
-      const vehicleEntries = entries.filter(
-        (e: ParkingEntry) => e.plateNumber.toLowerCase() === entry.plateNumber.toLowerCase() && e.id !== entry.id
-      );
-      
-      const previousOvernightEntry = vehicleEntries.find(e => {
-        if (e.exitTime) return false;
-        
-        const eDate = new Date(e.entryTime);
-        const entryDateOnly = new Date(eDate.getFullYear(), eDate.getMonth(), eDate.getDate());
-        const currentDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const isPreviousDay = entryDateOnly < currentDateOnly;
-        
-        const entryHour = eDate.getHours();
-        const entryMinute = eDate.getMinutes();
-        const entryTimeMinutes = entryHour * 60 + entryMinute;
-        const endTime = BUSINESS_END_HOUR * 60 + BUSINESS_END_MINUTE;
-        const enteredBeforeBusinessEnd = entryTimeMinutes < endTime;
-        
-        return (isPreviousDay && enteredBeforeBusinessEnd) || (enteredBeforeBusinessEnd && now.getHours() >= BUSINESS_END_HOUR && now.getMinutes() >= BUSINESS_END_MINUTE);
-      });
-      
-      if (previousOvernightEntry) {
-        const overnightEntryDate = new Date(previousOvernightEntry.entryTime);
-        const endOfDay = new Date(overnightEntryDate);
-        endOfDay.setHours(BUSINESS_END_HOUR, BUSINESS_END_MINUTE, 0, 0);
-        
-        const overnightMinutes = Math.ceil((endOfDay.getTime() - overnightEntryDate.getTime()) / (1000 * 60));
-        const overnightHalfHourBlocks = Math.ceil(overnightMinutes / 30);
-        const overnightFee = Math.max(overnightHalfHourBlocks * ratePerHalfHour, ratePerHalfHour);
-        
-        // Calculate current parking fee
-        const currentMinutes = Math.ceil((now.getTime() - entryDate.getTime()) / (1000 * 60));
-        const currentHalfHourBlocks = Math.ceil(currentMinutes / 30);
-        const currentParkingFee = Math.max(currentHalfHourBlocks * ratePerHalfHour, ratePerHalfHour);
-        
-        return {
-          hasBreakdown: true,
-          overnightFee,
-          currentFee: currentParkingFee,
-          totalFee: overnightFee + currentParkingFee,
-          overnightEntryTime: previousOvernightEntry.entryTime,
-          overnightEndTime: endOfDay.toISOString(),
-          currentEntryTime: entry.entryTime,
-          currentEndTime: now.toISOString()
-        };
-      }
-    }
-    
-    // Regular calculation (no breakdown needed)
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    const currentTime = currentHour * 60 + currentMinute;
-    const endTime = BUSINESS_END_HOUR * 60 + BUSINESS_END_MINUTE;
-    const isCurrentlyAfterBusinessHours = currentTime >= endTime;
-    
-    const entryHour = entryDate.getHours();
-    const entryMinute = entryDate.getMinutes();
-    const entryTimeMinutes = entryHour * 60 + entryMinute;
-    const enteredBeforeBusinessEnd = entryTimeMinutes < endTime;
-    
-    if (isCurrentlyAfterBusinessHours && enteredBeforeBusinessEnd) {
-      // Overnight parking: calculate from entry time to 5:30 PM
-      const endOfDay = new Date(entryDate);
-      endOfDay.setHours(BUSINESS_END_HOUR, BUSINESS_END_MINUTE, 0, 0);
-      
-      const minutes = Math.ceil((endOfDay.getTime() - entryDate.getTime()) / (1000 * 60));
-      const halfHourBlocks = Math.ceil(minutes / 30);
-      const fee = Math.max(halfHourBlocks * ratePerHalfHour, ratePerHalfHour);
-      
+    // Fetch all entries for this plate
+    const entries = await parkingService.getAllEntries();
+    const vehicleEntries = entries.filter(
+      (e: SupabaseParkingEntry) => e.plate_number.toLowerCase() === entry.plateNumber.toLowerCase()
+    );
+
+    // Find all outstanding overnight entries (no exit, entered before 5:30 PM, and either previous day or still after 5:30 PM)
+    const overnightRecords = vehicleEntries.filter(e => {
+      if (e.exit_time) return false;
+      const entryDate = new Date(e.entry_time);
+      const entryHour = entryDate.getHours();
+      const entryMinute = entryDate.getMinutes();
+      const entryTimeMinutes = entryHour * 60 + entryMinute;
+      const endTime = BUSINESS_END_HOUR * 60 + BUSINESS_END_MINUTE;
+      const enteredBeforeBusinessEnd = entryTimeMinutes < endTime;
+      const entryDateOnly = new Date(entryDate.getFullYear(), entryDate.getMonth(), entryDate.getDate());
+      const nowDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const isPreviousDay = entryDateOnly < nowDateOnly;
+      const currentHour = now.getHours();
+      const currentMinute = now.getMinutes();
+      const currentTime = currentHour * 60 + currentMinute;
+      const isCurrentlyAfterBusinessHours = currentTime >= endTime;
+      return (isPreviousDay && enteredBeforeBusinessEnd) || (enteredBeforeBusinessEnd && isCurrentlyAfterBusinessHours);
+    });
+
+    // For each overnight record, calculate fee and time range
+    const overnightBreakdown = overnightRecords.map(e => {
+      const entryDate = new Date(e.entry_time);
+      const overnightEnd = new Date(entryDate);
+      overnightEnd.setHours(BUSINESS_END_HOUR, BUSINESS_END_MINUTE, 0, 0);
+      const overnightMinutes = Math.ceil((overnightEnd.getTime() - entryDate.getTime()) / (1000 * 60));
+      const overnightFee = calculateFeeFromDuration(overnightMinutes);
       return {
-        hasBreakdown: false,
-        totalFee: fee,
-        entryTime: entry.entryTime,
-        endTime: endOfDay.toISOString()
+        entryTime: entryDate.toISOString(),
+        endTime: overnightEnd.toISOString(),
+        fee: overnightFee
       };
-    } else {
-      // Regular parking calculation: from entry time to current time
-      const minutes = Math.ceil((now.getTime() - entryDate.getTime()) / (1000 * 60));
-      const halfHourBlocks = Math.ceil(minutes / 30);
-      const fee = Math.max(halfHourBlocks * ratePerHalfHour, ratePerHalfHour);
-      
-      return {
-        hasBreakdown: false,
-        totalFee: fee,
-        entryTime: entry.entryTime,
-        endTime: now.toISOString()
-      };
+    });
+
+    // Sum all overnight fees
+    const overnightTotal = overnightBreakdown.reduce((sum, o) => sum + o.fee, 0);
+
+    // Check for a fresh entry for today (after all overnight entries)
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const freshEntry = vehicleEntries.find(e => {
+      if (e.exit_time) return false;
+      const entryDate = new Date(e.entry_time);
+      const entryDateOnly = new Date(entryDate.getFullYear(), entryDate.getMonth(), entryDate.getDate());
+      return entryDateOnly.getTime() === today.getTime();
+    });
+    let currentFee = 0;
+    let currentFeeStartTime = null;
+    let currentFeeEndTime = null;
+    if (freshEntry) {
+      currentFeeStartTime = new Date(freshEntry.entry_time);
+      currentFeeEndTime = now;
+      const currentMinutes = Math.ceil((now.getTime() - currentFeeStartTime.getTime()) / (1000 * 60));
+      currentFee = calculateFeeFromDuration(currentMinutes);
     }
+
+    return {
+      hasBreakdown: true,
+      overnightBreakdown,
+      overnightTotal,
+      currentFee,
+      totalFee: overnightTotal + currentFee,
+      currentEntryTime: currentFeeStartTime ? currentFeeStartTime.toISOString() : null,
+      currentEndTime: currentFeeEndTime ? currentFeeEndTime.toISOString() : null
+    };
   };
 
-  const calculateCurrentFee = (entry: ParkingEntry) => {
-    const breakdown = calculateFeeBreakdown(entry);
+  const calculateCurrentFee = async (entry: ParkingEntry) => {
+    const breakdown = await calculateFeeBreakdown(entry);
     return breakdown.totalFee;
   };
 
-  const handleSearch = () => {
+  // Helper to calculate duration from entry time to 5:30 PM same day
+  const getOvernightDuration = (entryTime: string) => {
+    const entryDate = new Date(entryTime);
+    const endOfDay = new Date(entryDate);
+    endOfDay.setHours(BUSINESS_END_HOUR, BUSINESS_END_MINUTE, 0, 0);
+    const minutes = Math.floor((endOfDay.getTime() - entryDate.getTime()) / (1000 * 60));
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    if (hours > 0) {
+      return `${hours}h ${remainingMinutes}m`;
+    }
+    return `${remainingMinutes}m`;
+  };
+
+  // Helper to determine if entry is overnight
+  const isOvernightEntry = (entry: ParkingEntry) => {
+    if (!entry) return false;
+    const entryDate = new Date(entry.entryTime);
+    const entryHour = entryDate.getHours();
+    const entryMinute = entryDate.getMinutes();
+    const entryTimeMinutes = entryHour * 60 + entryMinute;
+    const endTime = BUSINESS_END_HOUR * 60 + BUSINESS_END_MINUTE;
+    const enteredBeforeBusinessEnd = entryTimeMinutes < endTime;
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    const currentTime = currentHour * 60 + currentMinute;
+    const isCurrentlyAfterBusinessHours = currentTime >= endTime;
+    const entryDateOnly = new Date(entryDate.getFullYear(), entryDate.getMonth(), entryDate.getDate());
+    const nowDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const isPreviousDay = entryDateOnly < nowDateOnly;
+    return (isPreviousDay && enteredBeforeBusinessEnd) || (enteredBeforeBusinessEnd && isCurrentlyAfterBusinessHours);
+  };
+
+  const handleSearch = async () => {
     if (!plateNumber.trim()) {
       toast({
         title: "Error",
@@ -286,21 +401,25 @@ export const UserInterface = () => {
     setIsSearching(true);
 
     try {
-      const entries = JSON.parse(localStorage.getItem("parkingEntries") || "[]");
+      const entries = await parkingService.getAllEntries();
       // Find the most recent entry for this vehicle that hasn't exited
       const vehicleEntries = entries.filter(
-        (entry: ParkingEntry) => 
-          entry.plateNumber.toLowerCase() === plateNumber.toLowerCase() && !entry.exitTime
+        (entry: SupabaseParkingEntry) => 
+          entry.plate_number.toLowerCase() === plateNumber.toLowerCase() && !entry.exit_time
       );
 
       if (vehicleEntries.length > 0) {
         // Get the most recent entry
         const found = vehicleEntries[vehicleEntries.length - 1];
-        setSearchResult(found);
+        const transformedEntry = transformSupabaseEntry(found);
+        setSearchResult(transformedEntry);
+        
+        // Load fee data
+        await loadFeeData(transformedEntry);
         
         // Check if this vehicle has outstanding overnight parking
-        const hasOutstandingOvernight = checkForOutstandingOvernight(plateNumber, found.id);
-        const isOvernight = hasOutstandingOvernight || hasOutstandingOvernightParking(found);
+        const hasOutstandingOvernight = await checkForOutstandingOvernight(plateNumber, found.id);
+        const isOvernight = hasOutstandingOvernight || hasOutstandingOvernightParking(transformedEntry);
         
         const message = isOvernight 
           ? `Found parking record for ${plateNumber.toUpperCase()}. Includes overnight charges.`
@@ -312,6 +431,9 @@ export const UserInterface = () => {
         });
       } else {
         setSearchResult(null);
+        setCurrentFee(0);
+        setFeeBreakdown(null);
+        setHasOutstandingOvernight(false);
         toast({
           title: "Not Found",
           description: "No active parking record found for this vehicle",
@@ -319,6 +441,7 @@ export const UserInterface = () => {
         });
       }
     } catch (error) {
+      console.error('Error searching for vehicle:', error);
       toast({
         title: "Error",
         description: "Failed to search records",
@@ -329,25 +452,23 @@ export const UserInterface = () => {
     }
   };
 
-  const handleExit = () => {
+  const handleExit = async () => {
     if (!searchResult) return;
 
     const exitTime = new Date().toISOString();
-    const payment = calculatePayment(searchResult.entryTime, exitTime);
+    const payment = await calculatePayment(searchResult.entryTime, exitTime, searchResult.plateNumber);
     const isOvernight = hasOutstandingOvernightParking(searchResult);
     
     try {
-      const entries = JSON.parse(localStorage.getItem("parkingEntries") || "[]");
-      const updatedEntries = entries.map((entry: ParkingEntry) => 
-        entry.id === searchResult.id 
-          ? { ...entry, exitTime, payment, isOvernight }
-          : entry
-      );
-      
-      localStorage.setItem("parkingEntries", JSON.stringify(updatedEntries));
+      // Update the entry in the database
+      await parkingService.updateEntry(searchResult.id, {
+        exit_time: exitTime,
+        payment: payment,
+        is_overnight: isOvernight
+      });
       
       // Prepare receipt data
-      const breakdown = calculateFeeBreakdown(searchResult);
+      const breakdown = await calculateFeeBreakdown(searchResult);
       const receipt = {
         plateNumber: searchResult.plateNumber,
         entryTime: searchResult.entryTime,
@@ -363,16 +484,20 @@ export const UserInterface = () => {
       setShowReceipt(true);
       setSearchResult(null);
       setPlateNumber("");
+      setCurrentFee(0);
+      setFeeBreakdown(null);
+      setHasOutstandingOvernight(false);
       
       const message = isOvernight 
-        ? `Exit successful. Overnight parking fee: $${payment}`
-        : `Exit successful. Total fee: $${payment}`;
+        ? `Exit successful. Overnight parking fee: $${payment.toFixed(2)}`
+        : `Exit successful. Total fee: $${payment.toFixed(2)}`;
       
       toast({
         title: "Payment Processed",
         description: message,
       });
     } catch (error) {
+      console.error('Error processing exit:', error);
       toast({
         title: "Error",
         description: "Failed to process exit",
@@ -432,7 +557,7 @@ export const UserInterface = () => {
             
             <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 p-3 rounded-lg">
               <DollarSign className="w-4 h-4" />
-              <span>Rate: $0.50 per 30 minutes</span>
+              <span>Rate: BND$0.50 per 30 minutes</span>
             </div>
           </div>
         </CardContent>
@@ -463,7 +588,9 @@ export const UserInterface = () => {
                 <div className="space-y-2">
                   <Label className="text-sm font-medium text-muted-foreground">Parking Duration</Label>
                   <Badge variant="secondary" className="text-lg px-3 py-1">
-                    {calculateCurrentDuration(searchResult.entryTime)}
+                    <span className="ml-2 bg-green-100 text-green-700 rounded-full px-3 py-1 text-xs font-semibold">
+                      {isOvernightEntry(searchResult) ? getOvernightDuration(searchResult.entryTime) : calculateCurrentDuration(searchResult.entryTime)}
+                    </span>
                   </Badge>
                 </div>
               </div>
@@ -481,11 +608,15 @@ export const UserInterface = () => {
                   <Label className="text-sm font-medium text-muted-foreground">Current Fee</Label>
                   <div className="flex items-center gap-2">
                     <DollarSign className="w-4 h-4 text-success" />
-                    <span className={`text-xl font-bold ${hasOutstandingOvernightParking(searchResult) || checkForOutstandingOvernight(searchResult.plateNumber, searchResult.id) ? 'text-orange-600' : 'text-success'}`}>
-                      ${calculateCurrentFee(searchResult).toFixed(2)}
-                    </span>
+                    {isLoadingFee ? (
+                      <span className="text-xl font-bold text-muted-foreground">Loading...</span>
+                    ) : (
+                      <span className={`text-xl font-bold ${hasOutstandingOvernightParking(searchResult) || hasOutstandingOvernight ? 'text-orange-600' : 'text-success'}`}>
+                        ${currentFee.toFixed(2)}
+                      </span>
+                    )}
                   </div>
-                  {(hasOutstandingOvernightParking(searchResult) || checkForOutstandingOvernight(searchResult.plateNumber, searchResult.id)) && (
+                  {(hasOutstandingOvernightParking(searchResult) || hasOutstandingOvernight) && (
                     <div className="text-xs text-orange-600">
                       Includes overnight charges
                     </div>
@@ -494,42 +625,45 @@ export const UserInterface = () => {
               </div>
 
               {/* Fee Breakdown */}
-              {(() => {
-                const breakdown = calculateFeeBreakdown(searchResult);
-                if (breakdown.hasBreakdown) {
-                  return (
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                      <div className="flex items-center gap-2 mb-3">
-                        <DollarSign className="w-4 h-4 text-blue-600" />
-                        <span className="font-medium text-blue-800">Fee Breakdown</span>
-                      </div>
-                      <div className="space-y-2 text-sm">
-                        <div className="flex justify-between">
+              {feeBreakdown && feeBreakdown.hasBreakdown && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <DollarSign className="w-4 h-4 text-blue-600" />
+                    <span className="font-medium text-blue-800">Fee Breakdown</span>
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    {feeBreakdown.overnightBreakdown.map((o: any, index: number) => (
+                      <div key={index} className="flex flex-col mb-1">
+                        <div className="flex justify-between items-center">
                           <span className="text-blue-700">Overnight Fee:</span>
-                          <span className="font-medium">BND ${breakdown.overnightFee.toFixed(2)}</span>
+                          <span className="font-medium">BND ${o.fee.toFixed(2)}</span>
                         </div>
                         <div className="text-xs text-blue-600 ml-4">
-                          {new Date(breakdown.overnightEntryTime).toLocaleDateString()} {new Date(breakdown.overnightEntryTime).toLocaleTimeString()} - {new Date(breakdown.overnightEndTime).toLocaleTimeString()}
+                          {new Date(o.entryTime).toLocaleDateString()} {new Date(o.entryTime).toLocaleTimeString()} - {new Date(o.endTime).toLocaleTimeString()} 
+                          <span className="ml-2">({getOvernightDuration(o.entryTime)})</span>
                         </div>
+                      </div>
+                    ))}
+                    {feeBreakdown.currentFee > 0 && (
+                      <>
                         <div className="flex justify-between">
                           <span className="text-blue-700">Current Fee:</span>
-                          <span className="font-medium">BND ${breakdown.currentFee.toFixed(2)}</span>
+                          <span className="font-medium">BND ${feeBreakdown.currentFee.toFixed(2)}</span>
                         </div>
                         <div className="text-xs text-blue-600 ml-4">
-                          {new Date(breakdown.currentEntryTime).toLocaleDateString()} {new Date(breakdown.currentEntryTime).toLocaleTimeString()} - {new Date(breakdown.currentEndTime).toLocaleTimeString()}
+                          {new Date(feeBreakdown.currentEntryTime).toLocaleDateString()} {new Date(feeBreakdown.currentEntryTime).toLocaleTimeString()} - {new Date(feeBreakdown.currentEndTime).toLocaleTimeString()}
                         </div>
-                        <div className="border-t border-blue-200 pt-2 mt-2">
-                          <div className="flex justify-between font-bold">
-                            <span className="text-blue-800">Total Fee:</span>
-                            <span className="text-blue-800">BND ${breakdown.totalFee.toFixed(2)}</span>
-                          </div>
-                        </div>
+                      </>
+                    )}
+                    <div className="border-t border-blue-200 pt-2 mt-2">
+                      <div className="flex justify-between font-bold">
+                        <span className="text-blue-800">Total Fee:</span>
+                        <span className="text-blue-800">BND ${feeBreakdown.totalFee.toFixed(2)}</span>
                       </div>
                     </div>
-                  );
-                }
-                return null;
-              })()}
+                  </div>
+                </div>
+              )}
 
               {hasOutstandingOvernightParking(searchResult) && (
                 <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
@@ -545,14 +679,15 @@ export const UserInterface = () => {
 
               <Button 
                 onClick={handleExit}
+                disabled={isLoadingFee}
                 className={`w-full text-lg py-6 transition-all duration-300 ${
-                  hasOutstandingOvernightParking(searchResult) || checkForOutstandingOvernight(searchResult.plateNumber, searchResult.id)
+                  hasOutstandingOvernightParking(searchResult) || hasOutstandingOvernight
                     ? 'bg-orange-500 hover:bg-orange-600'
                     : 'bg-gradient-primary hover:shadow-elegant'
                 }`}
               >
                 <DollarSign className="w-5 h-5 mr-2" />
-                {hasOutstandingOvernightParking(searchResult) || checkForOutstandingOvernight(searchResult.plateNumber, searchResult.id) ? 'Pay Combined Fee' : 'Pay & Exit'} - BND ${calculateCurrentFee(searchResult).toFixed(2)}
+                {hasOutstandingOvernightParking(searchResult) || hasOutstandingOvernight ? 'Pay Combined Fee' : 'Pay & Exit'} - BND ${currentFee.toFixed(2)}
               </Button>
             </div>
           </CardContent>

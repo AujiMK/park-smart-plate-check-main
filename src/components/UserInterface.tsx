@@ -163,8 +163,8 @@ export const UserInterface = () => {
     }
   };
 
-  // Check if vehicle has outstanding overnight parking (entered before 5:30 PM and still parked after 5:30 PM)
-  const hasOutstandingOvernightParking = (entry: ParkingEntry) => {
+  // Check if vehicle has outstanding parking (entered before 5:30 PM and still parked after 5:30 PM)
+  const hasOutstandingParking = (entry: ParkingEntry) => {
     if (entry.exitTime) return false; // Already exited
     
     const entryDate = new Date(entry.entryTime);
@@ -180,9 +180,9 @@ export const UserInterface = () => {
     // Check if it's been more than 24 hours since entry
     const timeDiff = now.getTime() - entryDate.getTime();
     const hoursDiff = timeDiff / (1000 * 60 * 60);
-    const hasBeenOvernight = hoursDiff >= 24;
+    const hasBeenOutstanding = hoursDiff >= 24;
     
-    // Consider overnight if:
+    // Consider outstanding if:
     // 1. Vehicle entered before 5:30 PM AND has been parked for more than 24 hours, OR
     // 2. Vehicle entered before 5:30 PM AND it's currently after 5:30 PM
     const currentHour = now.getHours();
@@ -190,14 +190,14 @@ export const UserInterface = () => {
     const currentTime = currentHour * 60 + currentMinute;
     const isCurrentlyAfterBusinessHours = currentTime >= endTime;
     
-    return enteredBeforeBusinessEnd && (hasBeenOvernight || isCurrentlyAfterBusinessHours);
+    return enteredBeforeBusinessEnd && (hasBeenOutstanding || isCurrentlyAfterBusinessHours);
   };
 
   const calculatePayment = async (entryTime: string, exitTime: string, plateNumber: string) => {
     const entryDate = new Date(entryTime);
     const exitDate = new Date(exitTime);
     
-    // Check if this is overnight parking
+    // Check if this is outstanding parking
     const entryHour = entryDate.getHours();
     const entryMinute = entryDate.getMinutes();
     const entryTimeMinutes = entryHour * 60 + entryMinute;
@@ -207,15 +207,15 @@ export const UserInterface = () => {
     // Check if it's been more than 24 hours since entry
     const timeDiff = exitDate.getTime() - entryDate.getTime();
     const hoursDiff = timeDiff / (1000 * 60 * 60);
-    const hasBeenOvernight = hoursDiff >= 24;
+    const hasBeenOutstanding = hoursDiff >= 24;
     
-    if (enteredBeforeBusinessEnd && (hasBeenOvernight || exitDate.getHours() >= BUSINESS_END_HOUR)) {
-      // For overnight parking, calculate from entry time to 5:30 PM
+    if (enteredBeforeBusinessEnd && (hasBeenOutstanding || exitDate.getHours() >= BUSINESS_END_HOUR)) {
+      // For outstanding parking, calculate from entry time to 5:30 PM
       const endOfDay = new Date(entryDate);
       endOfDay.setHours(BUSINESS_END_HOUR, BUSINESS_END_MINUTE, 0, 0);
       
-      const overnightMinutes = Math.ceil((endOfDay.getTime() - entryDate.getTime()) / (1000 * 60));
-      const overnightFee = calculateFeeFromDuration(overnightMinutes);
+      const outstandingMinutes = Math.ceil((endOfDay.getTime() - entryDate.getTime()) / (1000 * 60));
+      const outstandingFee = calculateFeeFromDuration(outstandingMinutes);
       
       // Check if there's a fresh entry for this vehicle on the next day
       const entries = await parkingService.getAllEntries();
@@ -255,7 +255,7 @@ export const UserInterface = () => {
       const currentMinutes = Math.ceil((exitDate.getTime() - currentFeeStartTime.getTime()) / (1000 * 60));
       const currentFee = calculateFeeFromDuration(currentMinutes);
       
-      return overnightFee + currentFee;
+      return outstandingFee + currentFee;
     } else {
       // Regular parking calculation
       const totalMinutes = Math.ceil((exitDate.getTime() - entryDate.getTime()) / (1000 * 60));
@@ -368,8 +368,8 @@ export const UserInterface = () => {
     return `${remainingMinutes}m`;
   };
 
-  // Helper to determine if entry is overnight
-  const isOvernightEntry = (entry: ParkingEntry) => {
+  // Helper to determine if entry is outstanding
+  const isOutstandingEntry = (entry: ParkingEntry) => {
     if (!entry) return false;
     const entryDate = new Date(entry.entryTime);
     const entryHour = entryDate.getHours();
@@ -417,12 +417,12 @@ export const UserInterface = () => {
         // Load fee data
         await loadFeeData(transformedEntry);
         
-        // Check if this vehicle has outstanding overnight parking
-        const hasOutstandingOvernight = await checkForOutstandingOvernight(plateNumber, found.id);
-        const isOvernight = hasOutstandingOvernight || hasOutstandingOvernightParking(transformedEntry);
+        // Check if this vehicle has outstanding parking
+        const hasOutstanding = await checkForOutstandingOvernight(plateNumber, found.id);
+        const isOutstanding = hasOutstanding || hasOutstandingParking(transformedEntry);
         
-        const message = isOvernight 
-          ? `Found parking record for ${plateNumber.toUpperCase()}. Includes overnight charges.`
+        const message = isOutstanding 
+          ? `Found parking record for ${plateNumber.toUpperCase()}. Includes outstanding charges.`
           : `Found parking record for ${plateNumber.toUpperCase()}`;
         
         toast({
@@ -456,19 +456,21 @@ export const UserInterface = () => {
     if (!searchResult) return;
 
     const exitTime = new Date().toISOString();
-    const payment = await calculatePayment(searchResult.entryTime, exitTime, searchResult.plateNumber);
-    const isOvernight = hasOutstandingOvernightParking(searchResult);
+    const isOutstanding = hasOutstandingParking(searchResult);
     
     try {
+      // Get the fee breakdown first to ensure consistency
+      const breakdown = await calculateFeeBreakdown(searchResult);
+      const payment = breakdown.totalFee; // Use breakdown total for consistency
+      
       // Update the entry in the database
       await parkingService.updateEntry(searchResult.id, {
         exit_time: exitTime,
         payment: payment,
-        is_overnight: isOvernight
+        is_overnight: isOutstanding
       });
       
       // Prepare receipt data
-      const breakdown = await calculateFeeBreakdown(searchResult);
       const receipt = {
         plateNumber: searchResult.plateNumber,
         entryTime: searchResult.entryTime,
@@ -476,7 +478,7 @@ export const UserInterface = () => {
         payment,
         duration: calculateCurrentDuration(searchResult.entryTime),
         receiptId: `RCP-${Date.now()}`,
-        isOvernight,
+        isOvernight: isOutstanding,
         breakdown,
       };
       
@@ -488,8 +490,8 @@ export const UserInterface = () => {
       setFeeBreakdown(null);
       setHasOutstandingOvernight(false);
       
-      const message = isOvernight 
-        ? `Exit successful. Overnight parking fee: $${payment.toFixed(2)}`
+      const message = isOutstanding 
+        ? `Exit successful. Outstanding parking fee: $${payment.toFixed(2)}`
         : `Exit successful. Total fee: $${payment.toFixed(2)}`;
       
       toast({
@@ -570,9 +572,9 @@ export const UserInterface = () => {
             <CardTitle className="flex items-center gap-2">
               <Car className="w-5 h-5" />
               Vehicle Found
-              {hasOutstandingOvernightParking(searchResult) && (
+              {hasOutstandingParking(searchResult) && (
                 <Badge variant="outline" className="bg-orange-100 text-orange-800">
-                  Overnight Parking
+                  Outstanding Parking
                 </Badge>
               )}
             </CardTitle>
@@ -589,7 +591,7 @@ export const UserInterface = () => {
                   <Label className="text-sm font-medium text-muted-foreground">Parking Duration</Label>
                   <Badge variant="secondary" className="text-lg px-3 py-1">
                     <span className="ml-2 bg-green-100 text-green-700 rounded-full px-3 py-1 text-xs font-semibold">
-                      {isOvernightEntry(searchResult) ? getOvernightDuration(searchResult.entryTime) : calculateCurrentDuration(searchResult.entryTime)}
+                      {isOutstandingEntry(searchResult) ? getOvernightDuration(searchResult.entryTime) : calculateCurrentDuration(searchResult.entryTime)}
                     </span>
                   </Badge>
                 </div>
@@ -611,14 +613,14 @@ export const UserInterface = () => {
                     {isLoadingFee ? (
                       <span className="text-xl font-bold text-muted-foreground">Loading...</span>
                     ) : (
-                      <span className={`text-xl font-bold ${hasOutstandingOvernightParking(searchResult) || hasOutstandingOvernight ? 'text-orange-600' : 'text-success'}`}>
+                      <span className={`text-xl font-bold ${hasOutstandingParking(searchResult) || hasOutstandingOvernight ? 'text-orange-600' : 'text-success'}`}>
                         ${currentFee.toFixed(2)}
                       </span>
                     )}
                   </div>
-                  {(hasOutstandingOvernightParking(searchResult) || hasOutstandingOvernight) && (
+                  {(hasOutstandingParking(searchResult) || hasOutstandingOvernight) && (
                     <div className="text-xs text-orange-600">
-                      Includes overnight charges
+                      Includes outstanding charges
                     </div>
                   )}
                 </div>
@@ -635,7 +637,7 @@ export const UserInterface = () => {
                     {feeBreakdown.overnightBreakdown.map((o: any, index: number) => (
                       <div key={index} className="flex flex-col mb-1">
                         <div className="flex justify-between items-center">
-                          <span className="text-blue-700">Overnight Fee:</span>
+                          <span className="text-blue-700">Outstanding Fee:</span>
                           <span className="font-medium">BND ${o.fee.toFixed(2)}</span>
                         </div>
                         <div className="text-xs text-blue-600 ml-4">
@@ -665,14 +667,14 @@ export const UserInterface = () => {
                 </div>
               )}
 
-              {hasOutstandingOvernightParking(searchResult) && (
+              {hasOutstandingParking(searchResult) && (
                 <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
                   <div className="flex items-center gap-2 mb-2">
                     <AlertTriangle className="w-4 h-4 text-orange-600" />
-                    <span className="font-medium text-orange-800">Overnight Parking Notice</span>
+                    <span className="font-medium text-orange-800">Outstanding Parking Notice</span>
                   </div>
                   <p className="text-sm text-orange-700">
-                    This vehicle entered before 5:30 PM and is charged for overnight parking until 5:30 PM.
+                    This vehicle has an outstanding fee due to unpaid previous records.
                   </p>
                 </div>
               )}
@@ -681,13 +683,13 @@ export const UserInterface = () => {
                 onClick={handleExit}
                 disabled={isLoadingFee}
                 className={`w-full text-lg py-6 transition-all duration-300 ${
-                  hasOutstandingOvernightParking(searchResult) || hasOutstandingOvernight
+                  hasOutstandingParking(searchResult) || hasOutstandingOvernight
                     ? 'bg-orange-500 hover:bg-orange-600'
                     : 'bg-gradient-primary hover:shadow-elegant'
                 }`}
               >
                 <DollarSign className="w-5 h-5 mr-2" />
-                {hasOutstandingOvernightParking(searchResult) || hasOutstandingOvernight ? 'Pay Combined Fee' : 'Pay & Exit'} - BND ${currentFee.toFixed(2)}
+                {hasOutstandingParking(searchResult) || hasOutstandingOvernight ? 'Pay Combined Fee' : 'Pay & Exit'} - BND ${currentFee.toFixed(2)}
               </Button>
             </div>
           </CardContent>

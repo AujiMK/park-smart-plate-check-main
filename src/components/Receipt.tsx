@@ -13,11 +13,14 @@ interface ReceiptData {
   isOvernight?: boolean;
   breakdown?: {
     hasBreakdown: boolean;
-    overnightFee?: number;
+    overnightBreakdown?: Array<{
+      entryTime: string;
+      endTime: string;
+      fee: number;
+    }>;
+    overnightTotal?: number;
     currentFee?: number;
     totalFee: number;
-    overnightEntryTime?: string;
-    overnightEndTime?: string;
     currentEntryTime?: string;
     currentEndTime?: string;
   };
@@ -29,6 +32,57 @@ interface ReceiptProps {
 }
 
 export const Receipt = ({ data, onClose }: ReceiptProps) => {
+  // Calculate duration breakdown by day
+  const calculateDurationBreakdown = () => {
+    if (!data.breakdown?.hasBreakdown) {
+      return null;
+    }
+
+    const breakdown = [];
+    
+    // Add outstanding parking periods
+    if (data.breakdown.overnightBreakdown) {
+      data.breakdown.overnightBreakdown.forEach((period, index) => {
+        const entryDate = new Date(period.entryTime);
+        const endDate = new Date(period.endTime);
+        const durationMs = endDate.getTime() - entryDate.getTime();
+        const hours = Math.floor(durationMs / (1000 * 60 * 60));
+        const minutes = Math.floor((durationMs % (1000 * 60 * 60)) / (1000 * 60));
+        
+        breakdown.push({
+          date: entryDate.toLocaleDateString(),
+          startTime: entryDate.toLocaleTimeString(),
+          endTime: endDate.toLocaleTimeString(),
+          duration: hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`,
+          fee: period.fee,
+          type: 'Outstanding'
+        });
+      });
+    }
+    
+    // Add current parking period
+    if (data.breakdown.currentFee && data.breakdown.currentEntryTime && data.breakdown.currentEndTime) {
+      const entryDate = new Date(data.breakdown.currentEntryTime);
+      const endDate = new Date(data.breakdown.currentEndTime);
+      const durationMs = endDate.getTime() - entryDate.getTime();
+      const hours = Math.floor(durationMs / (1000 * 60 * 60));
+      const minutes = Math.floor((durationMs % (1000 * 60 * 60)) / (1000 * 60));
+      
+      breakdown.push({
+        date: entryDate.toLocaleDateString(),
+        startTime: entryDate.toLocaleTimeString(),
+        endTime: endDate.toLocaleTimeString(),
+        duration: hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`,
+        fee: data.breakdown.currentFee,
+        type: 'Current'
+      });
+    }
+    
+    return breakdown;
+  };
+
+  const durationBreakdown = calculateDurationBreakdown();
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
       <Card className="w-full max-w-md shadow-2xl animate-fade-in">
@@ -47,15 +101,15 @@ export const Receipt = ({ data, onClose }: ReceiptProps) => {
               <p className="font-mono font-bold text-lg">{data.receiptId}</p>
             </div>
 
-            {/* Overnight Parking Notice */}
+            {/* Outstanding Parking Notice */}
             {data.isOvernight && (
               <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-4">
                 <div className="flex items-center gap-2 mb-2">
                   <AlertTriangle className="w-4 h-4 text-orange-600" />
-                  <span className="font-medium text-orange-800">Overnight Parking</span>
+                  <span className="font-medium text-orange-800">Outstanding Parking</span>
                 </div>
                 <p className="text-sm text-orange-700">
-                  This vehicle was charged for overnight parking until 5:30 PM.
+                  This vehicle was charged for outstanding parking until 5:30 PM.
                 </p>
               </div>
             )}
@@ -86,10 +140,30 @@ export const Receipt = ({ data, onClose }: ReceiptProps) => {
                 <span>{new Date(data.exitTime).toLocaleString()}</span>
               </div>
 
-              <div className="flex items-center justify-between">
-                <span className="font-medium">Duration:</span>
-                <span className="font-semibold">{data.duration}</span>
-              </div>
+              {/* Duration Breakdown */}
+              {durationBreakdown ? (
+                <div className="space-y-2">
+                  <span className="font-medium">Duration Breakdown:</span>
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2">
+                    {durationBreakdown.map((period, index) => (
+                      <div key={index} className="text-sm">
+                        <div className="flex justify-between items-center">
+                          <span className="font-medium text-gray-700">{period.type}:</span>
+                          <span className="font-semibold">{period.duration}</span>
+                        </div>
+                        <div className="text-xs text-gray-600 ml-4">
+                          {period.date} {period.startTime} - {period.endTime}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">Duration:</span>
+                  <span className="font-semibold">{data.duration}</span>
+                </div>
+              )}
             </div>
 
             <Separator />
@@ -104,20 +178,28 @@ export const Receipt = ({ data, onClose }: ReceiptProps) => {
                       <span className="font-medium text-blue-800">Fee Breakdown</span>
                     </div>
                     <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-blue-700">Overnight Fee:</span>
-                        <span className="font-medium">BND ${data.breakdown.overnightFee?.toFixed(2)}</span>
-                      </div>
-                      <div className="text-xs text-blue-600 ml-4">
-                        {data.breakdown.overnightEntryTime && new Date(data.breakdown.overnightEntryTime).toLocaleDateString()} {data.breakdown.overnightEntryTime && new Date(data.breakdown.overnightEntryTime).toLocaleTimeString()} - {data.breakdown.overnightEndTime && new Date(data.breakdown.overnightEndTime).toLocaleTimeString()}
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-blue-700">Current Fee:</span>
-                        <span className="font-medium">BND ${data.breakdown.currentFee?.toFixed(2)}</span>
-                      </div>
-                      <div className="text-xs text-blue-600 ml-4">
-                        {data.breakdown.currentEntryTime && new Date(data.breakdown.currentEntryTime).toLocaleDateString()} {data.breakdown.currentEntryTime && new Date(data.breakdown.currentEntryTime).toLocaleTimeString()} - {data.breakdown.currentEndTime && new Date(data.breakdown.currentEndTime).toLocaleTimeString()}
-                      </div>
+                      {data.breakdown.overnightBreakdown && data.breakdown.overnightBreakdown.map((period, index) => (
+                        <div key={index} className="mb-2">
+                          <div className="flex justify-between">
+                            <span className="text-blue-700">Outstanding Fee:</span>
+                            <span className="font-medium">BND ${period.fee.toFixed(2)}</span>
+                          </div>
+                          <div className="text-xs text-blue-600 ml-4">
+                            {new Date(period.entryTime).toLocaleDateString()} {new Date(period.entryTime).toLocaleTimeString()} - {new Date(period.endTime).toLocaleTimeString()}
+                          </div>
+                        </div>
+                      ))}
+                      {data.breakdown.currentFee && data.breakdown.currentFee > 0 && (
+                        <>
+                          <div className="flex justify-between">
+                            <span className="text-blue-700">Current Fee:</span>
+                            <span className="font-medium">BND ${data.breakdown.currentFee.toFixed(2)}</span>
+                          </div>
+                          <div className="text-xs text-blue-600 ml-4">
+                            {data.breakdown.currentEntryTime && new Date(data.breakdown.currentEntryTime).toLocaleDateString()} {data.breakdown.currentEntryTime && new Date(data.breakdown.currentEntryTime).toLocaleTimeString()} - {data.breakdown.currentEndTime && new Date(data.breakdown.currentEndTime).toLocaleTimeString()}
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center justify-between border-t border-blue-200 pt-2">
@@ -136,7 +218,7 @@ export const Receipt = ({ data, onClose }: ReceiptProps) => {
               
               {data.isOvernight && !data.breakdown?.hasBreakdown && (
                 <p className="text-xs text-muted-foreground text-center">
-                  Overnight parking fee charged until 5:30 PM
+                  Outstanding parking fee charged until 5:30 PM
                 </p>
               )}
             </div>

@@ -57,8 +57,8 @@ export const ParkingEntry = ({ onEntryAdded }: ParkingEntryProps) => {
     return currentTime >= startTime && currentTime <= endTime;
   };
 
-  // Check if vehicle has outstanding overnight parking (entered before 5:30 PM and still parked after 5:30 PM)
-  const hasOutstandingOvernightParking = async (plateNumber: string) => {
+  // Check if vehicle has outstanding parking (entered before 5:30 PM and still parked after 5:30 PM)
+  const hasOutstandingParking = async (plateNumber: string) => {
     try {
       const existingEntries = await parkingService.getAllEntries();
       const vehicleEntries = existingEntries.filter(
@@ -87,7 +87,7 @@ export const ParkingEntry = ({ onEntryAdded }: ParkingEntryProps) => {
         const endTime = BUSINESS_END_HOUR * 60 + BUSINESS_END_MINUTE; // 5:30 PM
         const enteredBeforeBusinessEnd = entryTimeMinutes < endTime;
         
-        // Consider overnight if:
+        // Consider outstanding if:
         // 1. Previous day: any vehicle from previous day still parked AND entered before 5:30 PM
         // 2. Same day: entered before 5:30 PM and currently after 5:30 PM
         return (isPreviousDay && enteredBeforeBusinessEnd) || (enteredBeforeBusinessEnd && now.getHours() >= BUSINESS_END_HOUR && now.getMinutes() >= BUSINESS_END_MINUTE);
@@ -95,13 +95,13 @@ export const ParkingEntry = ({ onEntryAdded }: ParkingEntryProps) => {
       
       return false;
     } catch (error) {
-      console.error('Error checking overnight parking:', error);
+      console.error('Error checking outstanding parking:', error);
       return false;
     }
   };
 
-  // Check if vehicle can re-enter after overnight parking
-  const canReenterAfterOvernight = async (plateNumber: string) => {
+  // Check if vehicle can re-enter after outstanding parking
+  const canReenterAfterOutstanding = async (plateNumber: string) => {
     try {
       const existingEntries = await parkingService.getAllEntries();
       const vehicleEntries = existingEntries.filter(
@@ -114,8 +114,8 @@ export const ParkingEntry = ({ onEntryAdded }: ParkingEntryProps) => {
       const lastEntry = vehicleEntries[vehicleEntries.length - 1];
       
       if (!lastEntry.exit_time) {
-        // Still parked - check if it's overnight
-        if (await hasOutstandingOvernightParking(plateNumber)) {
+        // Still parked - check if it's outstanding
+        if (await hasOutstandingParking(plateNumber)) {
           // Check if it's the next day after 8:30 AM
           const now = new Date();
           const currentHour = now.getHours();
@@ -132,7 +132,7 @@ export const ParkingEntry = ({ onEntryAdded }: ParkingEntryProps) => {
           return canReenter;
         }
         
-        // If it's not overnight parking, don't allow re-entry
+        // If it's not outstanding parking, don't allow re-entry
         return false;
       }
       
@@ -158,10 +158,10 @@ export const ParkingEntry = ({ onEntryAdded }: ParkingEntryProps) => {
       return;
     }
 
-    // Check business hours (but allow overnight vehicles to re-enter after 8:30 AM)
-    const isOvernightVehicle = await hasOutstandingOvernightParking(sanitizedPlate);
+    // Check business hours (but allow outstanding vehicles to re-enter after 8:30 AM)
+          const isOutstandingVehicle = await hasOutstandingParking(sanitizedPlate);
     
-    if (!isWithinBusinessHours() && !isOvernightVehicle) {
+          if (!isWithinBusinessHours() && !isOutstandingVehicle) {
       toast({
         title: "Outside Business Hours",
         description: "Parking entry is only allowed between 8:30 AM and 5:30 PM",
@@ -175,15 +175,15 @@ export const ParkingEntry = ({ onEntryAdded }: ParkingEntryProps) => {
     try {
       const existingEntries = await parkingService.getAllEntries();
       
-      // Check if vehicle is already parked (but allow overnight vehicles to re-enter)
+      // Check if vehicle is already parked (but allow outstanding vehicles to re-enter)
       const alreadyParked = existingEntries.find(
         (entry: any) => entry.plate_number.toLowerCase() === sanitizedPlate.toLowerCase() && !entry.exit_time
       );
 
-      if (alreadyParked) {
-        // Check if this is an overnight vehicle that can re-enter
-        if (await hasOutstandingOvernightParking(sanitizedPlate)) {
-          // Allow overnight vehicles to re-enter after 8:30 AM
+              if (alreadyParked) {
+          // Check if this is an outstanding vehicle that can re-enter
+          if (await hasOutstandingParking(sanitizedPlate)) {
+            // Allow outstanding vehicles to re-enter after 8:30 AM
           const now = new Date();
           const currentHour = now.getHours();
           const currentMinute = now.getMinutes();
@@ -191,11 +191,11 @@ export const ParkingEntry = ({ onEntryAdded }: ParkingEntryProps) => {
           const startTime = BUSINESS_START_HOUR * 60 + BUSINESS_START_MINUTE; // 8:30 AM
           
           if (currentTime >= startTime) {
-            // Allow re-entry for overnight vehicles after 8:30 AM
-            console.log(`Allowing re-entry for overnight vehicle ${sanitizedPlate}`);
+            // Allow re-entry for outstanding vehicles after 8:30 AM
+            console.log(`Allowing re-entry for outstanding vehicle ${sanitizedPlate}`);
           } else {
             toast({
-              title: "Overnight Parking Restriction",
+              title: "Outstanding Parking Restriction",
               description: `Vehicle ${sanitizedPlate} can re-enter after 8:30 AM. Current time: ${now.toLocaleTimeString()}`,
               variant: "destructive",
             });

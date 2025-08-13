@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Car, Clock, DollarSign, LogOut, Users, Search, Calendar, AlertTriangle, TrendingUp, TrendingDown, BarChart3, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { parkingService, ParkingEntry as SupabaseParkingEntry } from "@/lib/supabase";
@@ -31,7 +32,7 @@ export const ParkingDashboard = ({ refreshTrigger }: ParkingDashboardProps) => {
   const [searchPlate, setSearchPlate] = useState("");
   const [selectedMonth, setSelectedMonth] = useState<string>("");
   const [monthlyStats, setMonthlyStats] = useState<any>(null);
-  const [overnightSearch, setOvernightSearch] = useState("");
+  const [outstandingSearch, setOutstandingSearch] = useState("");
   const { toast } = useToast();
 
   const ratePerHalfHour = 0.50; // $0.50 per 30 minutes
@@ -80,41 +81,41 @@ export const ParkingDashboard = ({ refreshTrigger }: ParkingDashboardProps) => {
     }
   };
 
-  // Check if vehicle has outstanding overnight parking (entered before 5:30 PM and still parked after 5:30 PM)
-  const hasOutstandingOvernightParking = (entry: ParkingEntry) => {
-    if (entry.exitTime) {
-      console.log(`Vehicle ${entry.plateNumber} (ID: ${entry.id}) has exitTime: ${entry.exitTime}, skipping overnight check`);
-      return false; // Already exited
-    }
-    
-    const entryDate = new Date(entry.entryTime);
-    const now = new Date();
-    
-    // Check if it's currently after 5:30 PM
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    const currentTime = currentHour * 60 + currentMinute;
-    const endTime = BUSINESS_END_HOUR * 60 + BUSINESS_END_MINUTE; // 5:30 PM
-    
-    // Check if it's from previous day (simpler date comparison)
-    const entryDateOnly = new Date(entryDate.getFullYear(), entryDate.getMonth(), entryDate.getDate());
-    const currentDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const isPreviousDay = entryDateOnly < currentDateOnly;
-    
-    // Check if vehicle entered before 5:30 PM on same day
-    const entryHour = entryDate.getHours();
-    const entryMinute = entryDate.getMinutes();
-    const entryTimeMinutes = entryHour * 60 + entryMinute;
-    const enteredBeforeBusinessEnd = entryTimeMinutes < endTime;
-    
-    // Consider overnight if:
-    // 1. Previous day: any vehicle from previous day still parked AND entered before 5:30 PM
-    // 2. Same day: entered before 5:30 PM and currently after 5:30 PM
-    const isOvernight = (isPreviousDay && enteredBeforeBusinessEnd) || (enteredBeforeBusinessEnd && currentTime >= endTime);
-    
-    console.log(`Vehicle ${entry.plateNumber} (ID: ${entry.id}) - isPreviousDay: ${isPreviousDay}, enteredBeforeBusinessEnd: ${enteredBeforeBusinessEnd}, currentTime >= endTime: ${currentTime >= endTime}, isOvernight: ${isOvernight}`);
-    
-    return isOvernight;
+  // Check if vehicle has outstanding parking (entered before 5:30 PM and still parked after 5:30 PM)
+  const hasOutstandingParking = (entry: ParkingEntry) => {
+          if (entry.exitTime) {
+        console.log(`Vehicle ${entry.plateNumber} (ID: ${entry.id}) has exitTime: ${entry.exitTime}, skipping outstanding check`);
+        return false; // Already exited
+      }
+      
+      const entryDate = new Date(entry.entryTime);
+      const now = new Date();
+      
+      // Check if it's currently after 5:30 PM
+      const currentHour = now.getHours();
+      const currentMinute = now.getMinutes();
+      const currentTime = currentHour * 60 + currentMinute;
+      const endTime = BUSINESS_END_HOUR * 60 + BUSINESS_END_MINUTE; // 5:30 PM
+      
+      // Check if it's from previous day (simpler date comparison)
+      const entryDateOnly = new Date(entryDate.getFullYear(), entryDate.getMonth(), entryDate.getDate());
+      const currentDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const isPreviousDay = entryDateOnly < currentDateOnly;
+      
+      // Check if vehicle entered before 5:30 PM on same day
+      const entryHour = entryDate.getHours();
+      const entryMinute = entryDate.getMinutes();
+      const entryTimeMinutes = entryHour * 60 + entryMinute;
+      const enteredBeforeBusinessEnd = entryTimeMinutes < endTime;
+      
+      // Consider outstanding if:
+      // 1. Previous day: any vehicle from previous day still parked AND entered before 5:30 PM
+      // 2. Same day: entered before 5:30 PM and currently after 5:30 PM
+      const isOutstanding = (isPreviousDay && enteredBeforeBusinessEnd) || (enteredBeforeBusinessEnd && currentTime >= endTime);
+      
+      console.log(`Vehicle ${entry.plateNumber} (ID: ${entry.id}) - isPreviousDay: ${isPreviousDay}, enteredBeforeBusinessEnd: ${enteredBeforeBusinessEnd}, currentTime >= endTime: ${currentTime >= endTime}, isOutstanding: ${isOutstanding}`);
+      
+      return isOutstanding;
   };
 
   // Calculate payment including overnight charges
@@ -405,7 +406,7 @@ export const ParkingDashboard = ({ refreshTrigger }: ParkingDashboardProps) => {
 
   // Filter currently parked vehicles based on search (exclude overnight vehicles)
   const getFilteredParkedVehicles = () => {
-    const parked = entries.filter(entry => !entry.exitTime && !hasOutstandingOvernightParking(entry));
+    const parked = entries.filter(entry => !entry.exitTime && !hasOutstandingParking(entry));
     
     if (!searchPlate.trim()) {
       return parked;
@@ -416,18 +417,18 @@ export const ParkingDashboard = ({ refreshTrigger }: ParkingDashboardProps) => {
     );
   };
 
-  // Get vehicles with outstanding overnight fees
-  const getOvernightVehicles = () => {
-    console.log("=== Checking for overnight vehicles ===");
-    const overnightVehicles = entries.filter(entry => {
-      const isOvernight = hasOutstandingOvernightParking(entry);
-      if (isOvernight) {
-        console.log(`Found overnight vehicle: ${entry.plateNumber} (ID: ${entry.id})`);
+  // Get vehicles with outstanding fees
+  const getOutstandingVehicles = () => {
+    console.log("=== Checking for outstanding vehicles ===");
+    const outstandingVehicles = entries.filter(entry => {
+      const isOutstanding = hasOutstandingParking(entry);
+      if (isOutstanding) {
+        console.log(`Found outstanding vehicle: ${entry.plateNumber} (ID: ${entry.id})`);
       }
-      return isOvernight;
+      return isOutstanding;
     });
-    console.log(`Total overnight vehicles found: ${overnightVehicles.length}`);
-    return overnightVehicles;
+    console.log(`Total outstanding vehicles found: ${outstandingVehicles.length}`);
+    return outstandingVehicles;
   };
 
   // Helper to calculate duration from entry time to 5:30 PM same day
@@ -633,13 +634,16 @@ export const ParkingDashboard = ({ refreshTrigger }: ParkingDashboardProps) => {
     }
   };
 
-  const currentlyParked = entries.filter(entry => !entry.exitTime && !hasOutstandingOvernightParking(entry));
+  const currentlyParked = entries.filter(entry => !entry.exitTime && !hasOutstandingParking(entry));
   const filteredParkedVehicles = getFilteredParkedVehicles();
-  const overnightVehicles = getOvernightVehicles();
+  const outstandingVehicles = getOutstandingVehicles();
   const todaysRevenue = calculateTodaysRevenue();
-  const filteredOvernightVehicles = overnightVehicles.filter(entry =>
-    entry.plateNumber.toLowerCase().includes(overnightSearch.toLowerCase())
+  const filteredOutstandingVehicles = outstandingVehicles.filter(entry =>
+    entry.plateNumber.toLowerCase().includes(outstandingSearch.toLowerCase())
   );
+  const totalOutstandingAmount = outstandingVehicles.reduce((total, entry) => {
+    return total + calculateOutstandingFee(entry);
+  }, 0);
 
   // Generate month options for the last 12 months
   const getMonthOptions = () => {
@@ -792,119 +796,150 @@ export const ParkingDashboard = ({ refreshTrigger }: ParkingDashboardProps) => {
         </CardContent>
       </Card>
 
-      {/* Overnight Parking Section */}
-      <Card className="shadow-card bg-gradient-card">
-        <CardHeader>
-          <CardTitle>Overnight Parking - Outstanding Fees</CardTitle>
-          <div className="flex gap-2 mt-2">
-            <Input
-              placeholder="Search by plate number..."
-              value={overnightSearch}
-              onChange={e => setOvernightSearch(e.target.value)}
-              className="w-48"
-            />
-            <Button onClick={() => setOvernightSearch("")}>Clear</Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {filteredOvernightVehicles.length === 0 ? (
-            <div className="text-muted-foreground">No outstanding overnight fees found.</div>
-          ) : (
-            filteredOvernightVehicles.map(entry => (
-              <div 
-                key={entry.id} 
-                className="flex items-center justify-between p-4 border border-orange-200 rounded-lg bg-white"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 bg-orange-500 rounded-full flex items-center justify-center">
-                    <Car className="w-5 h-5 text-white" />
-                  </div>
-                  <div>
-                    <p className="font-semibold text-lg">{entry.plateNumber}</p>
-                    <p className="text-sm text-muted-foreground">
-                      Entered: {new Date(entry.entryTime).toLocaleString()}
-                    </p>
-                    <p className="text-xs text-orange-600 font-medium">
-                      Overnight parking - Charged until 5:30 PM
-                    </p>
-                  </div>
-                </div>
-                
-                <div className="flex items-center gap-4">
-                  <div className="text-right">
-                    <Badge variant="secondary" className="mb-1 bg-orange-100 text-orange-800">
-                      {getOvernightDuration(entry.entryTime)}
-                    </Badge>
-                    <p className="text-sm font-bold text-orange-600">
-                      Outstanding: ${calculateOutstandingFee(entry).toFixed(2)}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
+      {/* Main Dashboard Tabs */}
+      <Tabs defaultValue="parked" className="w-full">
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="parked">Currently Parked</TabsTrigger>
+          <TabsTrigger value="outstanding">Outstanding Fees</TabsTrigger>
+          <TabsTrigger value="recent">Recent Exits</TabsTrigger>
+        </TabsList>
 
-      {/* Currently Parked Vehicles */}
-      <Card className="shadow-card">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              <Car className="w-5 h-5" />
-              Currently Parked Vehicles
-              {searchPlate && (
-                <Badge variant="secondary" className="ml-2">
-                  {filteredParkedVehicles.length} found
-                </Badge>
-              )}
-            </CardTitle>
-            <div className="flex items-center gap-2">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search plate number..."
-                  value={searchPlate}
-                  onChange={(e) => setSearchPlate(e.target.value)}
-                  className="pl-10 w-64"
-                />
+        {/* Currently Parked Vehicles Tab */}
+        <TabsContent value="parked" className="space-y-4">
+          <Card className="shadow-card">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2">
+                  <Car className="w-5 h-5" />
+                  Currently Parked Vehicles
+                  {searchPlate && (
+                    <Badge variant="secondary" className="ml-2">
+                      {filteredParkedVehicles.length} found
+                    </Badge>
+                  )}
+                </CardTitle>
+                <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search plate number..."
+                      value={searchPlate}
+                      onChange={(e) => setSearchPlate(e.target.value)}
+                      className="pl-10 w-64"
+                    />
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {currentlyParked.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Car className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p>No vehicles currently parked</p>
-            </div>
-          ) : filteredParkedVehicles.length === 0 && searchPlate ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Search className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p>No vehicles found matching "{searchPlate}"</p>
-              <Button 
-                variant="outline" 
-                onClick={() => setSearchPlate("")}
-                className="mt-2"
-              >
-                Clear Search
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {filteredParkedVehicles.map((entry) => {
-                const isOvernight = hasOutstandingOvernightParking(entry);
-                return (
+            </CardHeader>
+            <CardContent>
+              {currentlyParked.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Car className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                  <p>No vehicles currently parked</p>
+                </div>
+              ) : filteredParkedVehicles.length === 0 && searchPlate ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Search className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                  <p>No vehicles found matching "{searchPlate}"</p>
+                  <Button 
+                    variant="outline" 
+                    onClick={() => setSearchPlate("")}
+                    className="mt-2"
+                  >
+                    Clear Search
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {filteredParkedVehicles.map((entry) => {
+                    const isOutstanding = hasOutstandingParking(entry);
+                    return (
+                      <div 
+                        key={entry.id} 
+                        className={`flex items-center justify-between p-4 border rounded-lg bg-card hover:shadow-md transition-shadow ${
+                          isOutstanding ? 'border-orange-200 bg-orange-50' : ''
+                        }`}
+                      >
+                        <div className="flex items-center gap-4">
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                            isOutstanding ? 'bg-orange-500' : 'bg-gradient-primary'
+                          }`}>
+                            <Car className="w-5 h-5 text-white" />
+                          </div>
+                          <div>
+                            <p className="font-semibold text-lg">{entry.plateNumber}</p>
+                            <p className="text-sm text-muted-foreground">
+                              Entered: {new Date(entry.entryTime).toLocaleString()}
+                            </p>
+                            {isOutstanding && (
+                              <p className="text-xs text-orange-600 font-medium">
+                                Outstanding parking - Charged until 5:30 PM
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        
+                        <div className="flex items-center gap-4">
+                          <div className="text-right">
+                            <Badge variant="secondary" className="mb-1">
+                              {calculateCurrentDuration(entry.entryTime)}
+                            </Badge>
+                            <p className={`text-sm ${isOutstanding ? 'text-orange-600 font-bold' : 'text-muted-foreground'}`}>
+                              {isOutstanding ? 'Outstanding Fee: ' : 'Est. '}${calculateOutstandingFee(entry).toFixed(2)}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Outstanding Fees Tab */}
+        <TabsContent value="outstanding" className="space-y-4">
+          <Card className="shadow-card bg-gradient-card">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-2xl">Outstanding Fees</CardTitle>
+                  <div className="flex items-center gap-4 mt-2">
+                    <div className="text-3xl font-bold text-orange-600">
+                      Total Outstanding: ${totalOutstandingAmount.toFixed(2)}
+                    </div>
+                    <Badge variant="secondary" className="bg-orange-100 text-orange-800 text-lg px-3 py-1">
+                      {outstandingVehicles.length} vehicles
+                    </Badge>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="Search by plate number..."
+                    value={outstandingSearch}
+                    onChange={e => setOutstandingSearch(e.target.value)}
+                    className="w-48"
+                  />
+                  <Button onClick={() => setOutstandingSearch("")}>Clear</Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {filteredOutstandingVehicles.length === 0 ? (
+                <div className="text-muted-foreground text-center py-8">
+                  <AlertTriangle className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                  <p className="text-lg">No outstanding fees found.</p>
+                  <p className="text-sm text-muted-foreground">All vehicles are up to date with payments.</p>
+                </div>
+              ) : (
+                filteredOutstandingVehicles.map(entry => (
                   <div 
                     key={entry.id} 
-                    className={`flex items-center justify-between p-4 border rounded-lg bg-card hover:shadow-md transition-shadow ${
-                      isOvernight ? 'border-orange-200 bg-orange-50' : ''
-                    }`}
+                    className="flex items-center justify-between p-4 border border-orange-200 rounded-lg bg-white"
                   >
                     <div className="flex items-center gap-4">
-                      <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                        isOvernight ? 'bg-orange-500' : 'bg-gradient-primary'
-                      }`}>
+                      <div className="w-10 h-10 bg-orange-500 rounded-full flex items-center justify-center">
                         <Car className="w-5 h-5 text-white" />
                       </div>
                       <div>
@@ -912,96 +947,102 @@ export const ParkingDashboard = ({ refreshTrigger }: ParkingDashboardProps) => {
                         <p className="text-sm text-muted-foreground">
                           Entered: {new Date(entry.entryTime).toLocaleString()}
                         </p>
-                        {isOvernight && (
-                          <p className="text-xs text-orange-600 font-medium">
-                            Overnight parking - Charged until 5:30 PM
-                          </p>
-                        )}
+                        <p className="text-xs text-orange-600 font-medium">
+                          Outstanding parking - Charged until 5:30 PM
+                        </p>
                       </div>
                     </div>
                     
                     <div className="flex items-center gap-4">
                       <div className="text-right">
-                        <Badge variant="secondary" className="mb-1">
-                          {calculateCurrentDuration(entry.entryTime)}
+                        <Badge variant="secondary" className="mb-1 bg-orange-100 text-orange-800">
+                          {getOvernightDuration(entry.entryTime)}
                         </Badge>
-                        <p className={`text-sm ${isOvernight ? 'text-orange-600 font-bold' : 'text-muted-foreground'}`}>
-                          {isOvernight ? 'Overnight Fee: ' : 'Est. '}${calculateOutstandingFee(entry).toFixed(2)}
+                        <p className="text-sm font-bold text-orange-600">
+                          Outstanding: ${calculateOutstandingFee(entry).toFixed(2)}
                         </p>
                       </div>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-      {/* Recent Exits */}
-      <Card className="shadow-card">
-        <CardHeader>
-          <CardTitle>Recent Exits</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {entries.filter(entry => entry.exitTime).length === 0 ? (
-            <div className="text-center py-4 text-muted-foreground">
-              <p>No exit records yet</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {entries
-                .filter(entry => entry.exitTime)
-                .sort((a, b) => new Date(b.exitTime!).getTime() - new Date(a.exitTime!).getTime())
-                .slice(0, 5)
-                .map((entry) => {
-                  const breakdown = calculateExitFeeBreakdown(entry);
-                  return (
-                    <div 
-                      key={entry.id} 
-                      className="flex items-center justify-between p-3 border rounded-lg bg-muted/50"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="font-semibold">{entry.plateNumber}</div>
-                        <div className="text-sm text-muted-foreground">
-                          <div>Entry: {new Date(entry.entryTime).toLocaleString()}</div>
-                          <div>Exit: {new Date(entry.exitTime!).toLocaleString()}</div>
-                          <div className="text-xs text-blue-600">
-                            Duration: {calculateDuration(entry.entryTime, entry.exitTime!)}
-                          </div>
-                          {breakdown && (
-                            <div className="text-xs text-orange-600 mt-1">
-                              <div>Overnight: {new Date(breakdown.overnightEntryTime).toLocaleDateString()} {new Date(breakdown.overnightEntryTime).toLocaleTimeString()} - {new Date(breakdown.overnightEndTime).toLocaleTimeString()}</div>
-                              <div>Current: {new Date(breakdown.currentEntryTime).toLocaleDateString()} {new Date(breakdown.currentEntryTime).toLocaleTimeString()} - {new Date(breakdown.currentEndTime).toLocaleTimeString()}</div>
+        {/* Recent Exits Tab */}
+        <TabsContent value="recent" className="space-y-4">
+          <Card className="shadow-card">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <LogOut className="w-5 h-5" />
+                Recent Exits
+                <Badge variant="secondary" className="ml-2">
+                  Top 5 most recent
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {entries.filter(entry => entry.exitTime).length === 0 ? (
+                <div className="text-center py-4 text-muted-foreground">
+                  <p>No exit records yet</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {entries
+                    .filter(entry => entry.exitTime)
+                    .sort((a, b) => new Date(b.exitTime!).getTime() - new Date(a.exitTime!).getTime())
+                    .slice(0, 5)
+                    .map((entry) => {
+                      const breakdown = calculateExitFeeBreakdown(entry);
+                      return (
+                        <div 
+                          key={entry.id} 
+                          className="flex items-center justify-between p-3 border rounded-lg bg-muted/50"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="font-semibold">{entry.plateNumber}</div>
+                            <div className="text-sm text-muted-foreground">
+                              <div>Entry: {new Date(entry.entryTime).toLocaleString()}</div>
+                              <div>Exit: {new Date(entry.exitTime!).toLocaleString()}</div>
+                              <div className="text-xs text-blue-600">
+                                Duration: {calculateDuration(entry.entryTime, entry.exitTime!)}
+                              </div>
+                              {breakdown && (
+                                <div className="text-xs text-orange-600 mt-1">
+                                  <div>Outstanding: {new Date(breakdown.overnightEntryTime).toLocaleDateString()} {new Date(breakdown.overnightEntryTime).toLocaleTimeString()} - {new Date(breakdown.overnightEndTime).toLocaleTimeString()}</div>
+                                  <div>Current: {new Date(breakdown.currentEntryTime).toLocaleDateString()} {new Date(breakdown.currentEntryTime).toLocaleTimeString()} - {new Date(breakdown.currentEndTime).toLocaleTimeString()}</div>
+                                </div>
+                              )}
                             </div>
-                          )}
-                        </div>
-                        {(entry.isOvernight || breakdown) && (
-                          <Badge variant="outline" className="bg-orange-100 text-orange-800 text-xs whitespace-nowrap">
-                            {breakdown ? 'Combined' : 'Overnight'}
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="text-right">
-                        {breakdown ? (
-                          <div className="text-xs text-muted-foreground">
-                            <div>Overnight: BND ${breakdown.overnightFee.toFixed(2)}</div>
-                            <div>Current: BND ${breakdown.currentFee.toFixed(2)}</div>
-                            <div className="font-bold text-success">Total: BND ${breakdown.totalFee.toFixed(2)}</div>
+                            {(entry.isOvernight || breakdown) && (
+                              <Badge variant="outline" className="bg-orange-100 text-orange-800 text-xs whitespace-nowrap">
+                                {breakdown ? 'Combined' : 'Outstanding'}
+                              </Badge>
+                            )}
                           </div>
-                        ) : (
-                          <Badge variant="outline" className="bg-success text-success-foreground">
-                            BND ${entry.payment}
-                          </Badge>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                          <div className="text-right">
+                            {breakdown ? (
+                              <div className="text-xs text-muted-foreground">
+                                <div>Outstanding: BND ${breakdown.overnightFee.toFixed(2)}</div>
+                                <div>Current: BND ${breakdown.currentFee.toFixed(2)}</div>
+                                <div className="font-bold text-success">Total: BND ${breakdown.totalFee.toFixed(2)}</div>
+                              </div>
+                            ) : (
+                              <Badge variant="outline" className="bg-success text-success-foreground">
+                                BND ${entry.payment}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }; 
